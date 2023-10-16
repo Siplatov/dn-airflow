@@ -1,0 +1,24 @@
+################################
+## Airflow Worker Service
+#################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "airflow.fullname" . }}-worker
+  labels:
+    tier: airflow
+    component: worker
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+spec:
+  clusterIP: None
+  selector:
+    tier: airflow
+    component: worker
+    release: {{ .Release.Name }}
+  ports:
+    - name: worker-logs
+      protocol: TCP
+      port: {{ .Values.ports.workerLogs }}
+      targetPort: {{ .Values.ports.workerLogs }}

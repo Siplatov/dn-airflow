@@ -1,0 +1,47 @@
+################################
+## Airflow Redis StatefulSet
+#################################
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels:
+    tier: airflow
+    component: redis
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+spec:
+  serviceName: {{ .Release.Name }}-redis
+  selector:
+    matchLabels:
+      tier: airflow
+      component: redis
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: redis
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ template "redis_image" . }}
+          imagePullPolicy: {{ .Values.images.redis.pullPolicy }}
+          command: ["/bin/sh"]
+          args: ["-c", "redis-server --requirepass ${REDIS_PASSWORD}"]
+          ports:
+            - name: redis-db
+              containerPort: {{ .Values.ports.redisDB }}
+          volumeMounts:
+            - name: redis-db
+              mountPath: /data
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ template "redis_password_secret" . }}
+                  key: password
+      volumes:
+        - name: redis-db
+          emptyDir: {}
