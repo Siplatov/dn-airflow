@@ -223,7 +223,7 @@ dags:
   gitSync:
     enable: true
     repo: git@github.com:Siplatov/dn-airflow.git
-    branch: master
+    branch: main
     maxFailures: 0
     subPath: "part2/dags"
     
