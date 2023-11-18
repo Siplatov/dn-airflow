@@ -1,0 +1,243 @@
+# Устанавливаем тип executor
+# Возможные варианты: LocalExecutor, LocalKubernetesExecutor, CeleryExecutor, KubernetesExecutor, CeleryKubernetesExecutor
+executor: "CeleryExecutor"
+
+# Домашняя директория Airflow
+airflowHome: /opt/airflow
+
+# Версия Airflow
+airflowVersion: "2.6.2"
+
+# Образы используемые при деплое
+images:
+  airflow:
+    repository: apache/airflow
+    tag: "2.6.2"
+    pullPolicy: IfNotPresent
+  redis:
+    repository: redis
+    tag: 7-bullseye
+    pullPolicy: IfNotPresent
+  gitSync:
+    repository: registry.k8s.io/git-sync/git-sync
+    tag: v4.1.0
+    pullPolicy: IfNotPresent
+
+# Сколько секунд будет ждать, пока выполнится задача с миграциями
+migrationsWaitTimeout: 60
+
+# Какие порты будут использоваться
+ports:
+  airflowUI: 8080
+  workerLogs: 8793
+  redisDB: 6379
+
+
+# Определяем некоторые параметры airflow конфигурации
+config:
+  core:
+    dags_folder: '{{ include "airflow_dags" . }}'
+    load_examples: 'False'
+    executor: '{{ .Values.executor }}'
+  logging:
+    remote_logging: 'False'
+    colored_console_log: 'True'
+  webserver:
+    rbac: 'True'
+  celery:
+    worker_concurrency: 16
+
+
+# Какие переменные окружения будем использовать
+enableBuiltInSecretEnvVars:
+  AIRFLOW__CORE__FERNET_KEY: true
+  AIRFLOW__CORE__SQL_ALCHEMY_CONN: true
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: true
+  AIRFLOW_CONN_AIRFLOW_DB: true
+  AIRFLOW__WEBSERVER__SECRET_KEY: true
+  AIRFLOW__CELERY__CELERY_RESULT_BACKEND: true
+  AIRFLOW__CELERY__RESULT_BACKEND: true
+  AIRFLOW__CELERY__BROKER_URL: true
+
+
+# Настройки подключения к postgresql
+data:
+
+  metadataConnection:
+    user: <your_pg_user>
+    pass: <your_pg_pass>
+    protocol: postgresql
+    host: <your_pg_host>
+    port: 6432
+    db: db
+    sslmode: disable
+
+  resultBackendSecretName: ~
+  brokerUrlSecretName: ~
+  resultBackendConnection: ~
+  brokerUrl: ~
+
+
+# Задаем параметры для задачи по созданию пользователей
+createUserJob:
+  # Команда, которая будет выполняться при запуске задачи
+  command: ~
+  args:
+    - "bash"
+    - "-c"
+    - |-
+      exec \
+      airflow users create "$@"
+    - --
+    - "-r"
+    - "{{ .Values.webserver.defaultUser.role }}"
+    - "-u"
+    - "{{ .Values.webserver.defaultUser.username }}"
+    - "-e"
+    - "{{ .Values.webserver.defaultUser.email }}"
+    - "-f"
+    - "{{ .Values.webserver.defaultUser.firstName }}"
+    - "-l"
+    - "{{ .Values.webserver.defaultUser.lastName }}"
+    - "-p"
+    - "{{ .Values.webserver.defaultUser.password }}"
+
+  # Исользуем HelmHook
+  useHelmHooks: true
+
+
+# Задаем параметры для задачи по миграции
+migrateDatabaseJob:
+  enabled: true
+  # Команда, которая будет выполняться при запуске задачи
+  command: ~
+  args:
+    - "bash"
+    - "-c"
+    - |-
+      exec \
+      airflow db upgrade
+
+  # Исользуем HelmHook
+  useHelmHooks: true
+
+
+# Задаем параметры планировщика
+scheduler:
+  
+  # Кол-во реплик планировщика
+  replicas: 1
+
+  # Команда, которая будет выполняться для запуска планировщика
+  command: ~
+  args: ["bash", "-c", "exec airflow scheduler"]
+
+  # Параметры проверки состояния пода планировщика
+  livenessProbe:
+    initialDelaySeconds: 10
+    timeoutSeconds: 20
+    failureThreshold: 5
+    periodSeconds: 60
+  
+  # Ожидаем выполнения миграций
+  waitForMigrations:
+    enabled: true
+
+
+# Задаем параметры вебсервера
+webserver:
+
+  # Кол-во реплик вебсервера
+  replicas: 1
+
+  # Команда, которая будет выполняться для запуска вебсервера
+  command: ~
+  args: ["bash", "-c", "exec airflow webserver"]
+
+  # Возможность читать логи с подов
+  allowPodLogReading: true
+
+  # Параметры проверки состояния пода планировщика
+  livenessProbe:
+    initialDelaySeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 5
+    periodSeconds: 10
+    scheme: HTTP
+
+  # Параметры проверки состояния готовности планировщика
+  readinessProbe:
+    initialDelaySeconds: 60
+    timeoutSeconds: 5
+    failureThreshold: 5
+    periodSeconds: 10
+    scheme: HTTP
+
+  # Параметры создаваемого пользователя
+  defaultUser:
+    enabled: true
+    role: Admin
+    username: admin
+    email: admin@example.com
+    firstName: admin
+    lastName: user
+    password: admin
+
+  # Параметры сервиса
+  service:
+    type: ClusterIP
+    ports:
+      - name: airflow-ui
+        port: "{{ .Values.ports.airflowUI }}"
+
+  # Ожидаем выполнения миграций
+  waitForMigrations:
+    enabled: true
+
+
+# Задаем параметры воркера
+workers:
+  # Число реплик воркера
+  replicas: 1
+
+  # Команда, которая будет выполняться для запуска вебсервера
+  command: ~
+  args:
+    - "bash"
+    - "-c"
+    - |-
+      exec \
+      airflow {{ semverCompare ">=2.0.0" .Values.airflowVersion | ternary "celery worker" "worker" }}
+
+  # Параметры проверки состояния пода планировщика
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    timeoutSeconds: 20
+    failureThreshold: 5
+    periodSeconds: 60
+
+
+# Параметры для Git sync
+dags:
+  gitSync:
+    enable: true
+    repo: git@github.com:Siplatov/dn-airflow.git
+    branch: master
+    maxFailures: 0
+    subPath: "part2/dags"
+    
+    sshKeySecret: airflow-ssh-secret
+
+    wait: 10s
+    containerName: git-sync
+    uid: 65533
+
+
+# Конфигурация для хранения логов с worker
+logs:
+
+  persistence:
+    enabled: true
+    # Размер
+    size: 3Gi

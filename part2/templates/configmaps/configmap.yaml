@@ -1,0 +1,22 @@
+################################
+## Airflow ConfigMap
+#################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "airflow_config" . }}
+  labels:
+    tier: airflow
+    component: config
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+{{- $Global := . }}
+data:
+  airflow.cfg: |-
+    {{- range $section, $settings := .Values.config }}
+    [{{ $section }}]
+    {{- range $key, $val := $settings }}
+    {{ $key }} = {{ tpl ($val | toString) $Global }}
+    {{- end }}
+    {{ end }}

@@ -1,0 +1,101 @@
+################################
+## Airflow Worker Deployment
+#################################
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "airflow.fullname" . }}-worker
+  labels:
+    tier: airflow
+    component: worker
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.workers.replicas }}
+  serviceName: {{ include "airflow.fullname" . }}-worker
+  selector:
+    matchLabels:
+      tier: airflow
+      component: worker
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: worker
+        release: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsUser: 50000
+        fsGroup: 0
+      {{- if .Values.schedulerName }}
+      schedulerName: {{ .Values.schedulerName }}
+      {{- end }}
+      restartPolicy: Always
+      initContainers:
+        - name: wait-for-airflow-migrations
+          image: {{ template "airflow_image_for_migrations" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          volumeMounts:
+            {{- include "airflow_config_mount" . | nindent 12 }}
+          args: {{- include "wait-for-migrations-command" . | indent 10 }}
+          env:
+            {{- include "standard_airflow_environment" . | indent 10 }}
+      containers:
+        - name: worker
+          image: {{ template "airflow_image" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          {{- if .Values.workers.command }}
+          command: {{ tpl (toYaml .Values.workers.command) . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.workers.args }}
+          args: {{ tpl (toYaml .Values.workers.args) . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.workers.livenessProbe.enabled }}
+          livenessProbe:
+            initialDelaySeconds: {{ .Values.workers.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.workers.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.workers.livenessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.workers.livenessProbe.periodSeconds }}
+            exec:
+              command:
+                - sh
+                - -c
+                - CONNECTION_CHECK_MAX_COUNT=0 exec /entrypoint python -m celery --app airflow.executors.celery_executor.app inspect ping -d celery@$(hostname)
+          {{- end }}
+          volumeMounts:
+            - name: logs
+              mountPath: {{ template "airflow_logs" . }}
+            - name: dags
+              mountPath: /opt/airflow/dags
+            {{- include "airflow_config_mount" . | nindent 12 }}
+          env:
+            - name: DUMB_INIT_SETSID
+              value: "0"
+            {{- include "standard_airflow_environment" . | indent 10 }}
+        {{- if .Values.dags.gitSync.enable }}    
+          {{- include "git_sync_container" . | indent 8 }}
+        {{- end}}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "airflow_config" . }}
+        - name: dags
+          emptyDir: {}
+        {{- if .Values.dags.gitSync.sshKeySecret }}
+          {{- include "git_sync_ssh_key_volume" . | indent 8 }}
+        {{- end }}
+  {{- if not .Values.logs.persistence.enabled }}
+        - name: logs
+          emptyDir: {}
+  {{else}}
+  volumeClaimTemplates:
+    - metadata:
+        name: logs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.logs.persistence.size }}
+  {{end}}

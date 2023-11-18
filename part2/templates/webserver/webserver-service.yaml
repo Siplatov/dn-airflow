@@ -1,0 +1,25 @@
+################################
+## Airflow Webserver Service
+#################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-webserver
+  labels:
+    tier: airflow
+    component: webserver
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+spec:
+  type: {{ .Values.webserver.service.type }}
+  selector:
+    tier: airflow
+    component: webserver
+    release: {{ .Release.Name }}
+  ports:
+  {{- range .Values.webserver.service.ports }}
+    - {{ range $key, $val := . }}
+      {{- $key }}: {{ tpl (toString $val) $ }}
+      {{ end }}
+  {{- end }}

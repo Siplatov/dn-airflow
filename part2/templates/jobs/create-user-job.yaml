@@ -1,0 +1,49 @@
+################################
+## Airflow Create User Job
+#################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "airflow.fullname" . }}-create-user
+  labels:
+    tier: airflow
+    component: create-user-job
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+  {{- $annotations := dict }}
+  {{- if .Values.createUserJob.useHelmHooks }}
+    {{- $_ := set $annotations "helm.sh/hook" "post-install,post-upgrade" }}
+    {{- $_ := set $annotations "helm.sh/hook-weight" "2" }}
+    {{- $_ := set $annotations "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+  {{- end }}
+spec:
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: create-user-job
+        release: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.schedulerName }}
+      schedulerName: {{ .Values.schedulerName }}
+      {{- end }}
+      containers:
+        - name: create-user
+          image: {{ template "airflow_image" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          {{- if .Values.createUserJob.command }}
+          command: {{ tpl (toYaml .Values.createUserJob.command) . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.createUserJob.args }}
+          args: {{ tpl (toYaml .Values.createUserJob.args) . | nindent 12 }}
+          {{- end }}
+          env:
+          {{- include "standard_airflow_environment" . | indent 10 }}
+          volumeMounts:
+            {{- include "airflow_config_mount" . | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "airflow_config" . }}

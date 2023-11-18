@@ -1,0 +1,32 @@
+################################
+## Airflow Webserver Ingress
+################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+  labels:
+    tier: airflow
+    component: airflow-ingress
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    heritage: {{ .Release.Service }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  rules:
+  - host: airflow.data-notes.ru
+    http:
+      paths:
+      - backend:
+          service:
+            name: {{ .Release.Name }}-webserver
+            port:
+              name: airflow-ui
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - airflow.data-notes.ru
+    secretName: ingress-webserver-secret

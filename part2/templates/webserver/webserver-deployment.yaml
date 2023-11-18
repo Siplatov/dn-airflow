@@ -1,0 +1,83 @@
+################################
+## Airflow Webserver Deployment
+################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-webserver
+  labels:
+    tier: airflow
+    component: webserver
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+spec:
+  replicas: {{ .Values.webserver.replicas }}
+  selector:
+    matchLabels:
+      tier: airflow
+      component: webserver
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: webserver
+        release: {{ .Release.Name }}
+    spec:
+      restartPolicy: Always
+      initContainers:
+        - name: wait-for-airflow-migrations
+          resources: {{- toYaml .Values.webserver.resources | nindent 12 }}
+          image: {{ template "airflow_image_for_migrations" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          volumeMounts:
+            {{- include "airflow_config_mount" . | nindent 12 }}
+          args: {{- include "wait-for-migrations-command" . | indent 10 }}
+          env:
+            {{- include "standard_airflow_environment" . | indent 10 }}
+      containers:
+        - name: webserver
+          image: {{ template "airflow_image" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          {{- if .Values.webserver.command }}
+          command: {{ tpl (toYaml .Values.webserver.command) . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.webserver.args }}
+          args: {{- tpl (toYaml .Values.webserver.args) . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "airflow_config_mount" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ if .Values.config.webserver.base_url }}{{- with urlParse (tpl .Values.config.webserver.base_url .) }}{{ .path }}{{ end }}{{ end }}/health
+              port: {{ .Values.ports.airflowUI }}
+              {{- if .Values.config.webserver.base_url}}
+              httpHeaders:
+                - name: Host
+                  value: {{ regexReplaceAll ":\\d+$" (urlParse (tpl .Values.config.webserver.base_url .)).host  "" }}
+              {{- end }}
+              scheme: {{ .Values.webserver.livenessProbe.scheme | default "http" }}
+            initialDelaySeconds: {{ .Values.webserver.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.webserver.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.webserver.livenessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.webserver.livenessProbe.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ if .Values.config.webserver.base_url }}{{- with urlParse (tpl .Values.config.webserver.base_url .) }}{{ .path }}{{ end }}{{ end }}/health
+              port: {{ .Values.ports.airflowUI }}
+              {{- if .Values.config.webserver.base_url }}
+              httpHeaders:
+                - name: Host
+                  value: {{ regexReplaceAll ":\\d+$" (urlParse (tpl .Values.config.webserver.base_url .)).host  "" }}
+              {{- end }}
+              scheme: {{ .Values.webserver.readinessProbe.scheme | default "http" }}
+            initialDelaySeconds: {{ .Values.webserver.readinessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.webserver.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.webserver.readinessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.webserver.readinessProbe.periodSeconds }}
+          env:
+            {{- include "standard_airflow_environment" . | indent 10 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "airflow_config" . }}

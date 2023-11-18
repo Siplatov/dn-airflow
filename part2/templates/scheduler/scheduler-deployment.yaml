@@ -1,0 +1,79 @@
+################################
+## Airflow Scheduler Deployment
+#################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "airflow.fullname" . }}-scheduler
+  labels:
+    tier: airflow
+    component: scheduler
+    release: {{ .Release.Name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    executor: {{ .Values.executor }}
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  selector:
+    matchLabels:
+      tier: airflow
+      component: scheduler
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: scheduler
+        release: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsUser: 50000
+        fsGroup: 0
+      initContainers:
+        - name: wait-for-airflow-migrations
+          image: {{ template "airflow_image_for_migrations" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          volumeMounts:
+            {{- include "airflow_config_mount" . | nindent 12 }}
+          args: {{- include "wait-for-migrations-command" . | indent 10 }}
+          env:
+            {{- include "standard_airflow_environment" . | indent 10 }}
+      containers:
+        - name: scheduler
+          image: {{ template "airflow_image" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          {{- if .Values.scheduler.command }}
+          command: {{ tpl (toYaml .Values.scheduler.command) . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.scheduler.args }}
+          args: {{ tpl (toYaml .Values.scheduler.args) . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "standard_airflow_environment" . | indent 10 }}
+          livenessProbe:
+            initialDelaySeconds: {{ .Values.scheduler.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.scheduler.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.scheduler.livenessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.scheduler.livenessProbe.periodSeconds }}
+            exec:
+              command:
+                  {{- include "scheduler_liveness_check_command" . | indent 14 }}
+          volumeMounts:
+            - name: logs
+              mountPath: {{ template "airflow_logs" . }}
+            - name: dags
+              mountPath: /opt/airflow/dags
+            {{- include "airflow_config_mount" . | nindent 12 }}
+        {{- if .Values.dags.gitSync.enable }}    
+          {{- include "git_sync_container" . | indent 8 }}
+        {{- end}}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "airflow_config" . }}
+        - name: logs
+          emptyDir: {}
+        - name: dags
+          emptyDir: {}
+        {{- if .Values.dags.gitSync.sshKeySecret }}
+          {{- include "git_sync_ssh_key_volume" . | indent 8 }}
+        {{- end }}

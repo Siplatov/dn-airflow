@@ -1,0 +1,1002 @@
+################################
+## Airflow Git-sync Key Secret
+################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-ssh-secret
+data:
+  gitSshKey: '<base_64_ssh_key>'
+---
+
+
+################################
+## Airflow Metadata Secret
+#################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-metadata
+  labels:
+    tier: airflow
+    release: airflow
+    chart: airflow
+    heritage: Helm
+type: Opaque
+data:
+  connection: "cG9zdGdyZXNxbDovL2FpcmZsb3ctZGItdXNlcjphaXJmbG93LWRiLXBhc3d9keJkQHJjMWItZzJ4MXExdnl5dG0ycjZhZy5tZGIueWFuZGV4Y2xvdWQubmV0OjY0MzIvZGI"
+---
+
+
+############################################
+## Airflow Webserver Flask Secret Key Secret
+############################################
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-webserver-secret-key
+  labels:
+    tier: airflow
+    component: webserver
+    release: airflow
+    chart: airflow
+    heritage: Helm
+type: Opaque
+data:
+  webserver-secret-key: "ZVhSUWFEQXdOV3czVmtsNmasdsajWFpzWm1GQ1NUTTJNVnBQYlRBNWVGTT0="
+---
+
+
+################################
+## Airflow ConfigMap
+#################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-airflow-config
+  labels:
+    tier: airflow
+    component: config
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+data:
+  airflow.cfg: |-
+    [celery]
+    worker_concurrency = 16
+
+    [core]
+    dags_folder = /opt/airflow/dags/repo
+    executor = CeleryExecutor
+    load_examples = False
+
+    [logging]
+    colored_console_log = True
+    remote_logging = False
+
+    [webserver]
+    rbac = True
+---
+
+################################
+## Airflow Redis Service
+#################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-redis
+  labels:
+    tier: airflow
+    component: redis
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  type: ClusterIP
+  selector:
+    tier: airflow
+    component: redis
+    release: airflow
+  ports:
+    - name: redis-db
+      protocol: TCP
+      port: 6379
+      targetPort: 6379
+---
+
+
+################################
+## Airflow Webserver Service
+#################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  labels:
+    tier: airflow
+    component: webserver
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  type: ClusterIP
+  selector:
+    tier: airflow
+    component: webserver
+    release: airflow
+  ports:
+    - name: airflow-ui
+      port: 8080
+---
+
+
+################################
+## Airflow Worker Service
+#################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-worker
+  labels:
+    tier: airflow
+    component: worker
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  clusterIP: None
+  selector:
+    tier: airflow
+    component: worker
+    release: airflow
+  ports:
+    - name: worker-logs
+      protocol: TCP
+      port: 8793
+      targetPort: 8793
+---
+
+
+################################
+## Airflow Scheduler Deployment
+#################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  labels:
+    tier: airflow
+    component: scheduler
+    release: airflow
+    chart: "airflow-1"
+    executor: CeleryExecutor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: airflow
+      component: scheduler
+      release: airflow
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: scheduler
+        release: airflow
+    spec:
+      securityContext:
+        runAsUser: 50000
+        fsGroup: 0
+      initContainers:
+        - name: wait-for-airflow-migrations
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+          args:
+            - airflow
+            - db
+            - check-migrations
+            - --migration-wait-timeout= 60
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+      containers:
+        - name: scheduler
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - bash
+            - -c
+            - exec airflow scheduler
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+          livenessProbe:
+            initialDelaySeconds: 10
+            timeoutSeconds: 20
+            failureThreshold: 5
+            periodSeconds: 60
+            exec:
+              command:
+                - sh
+                - -c
+                - |
+                  CONNECTION_CHECK_MAX_COUNT=0 AIRFLOW__LOGGING__LOGGING_LEVEL=ERROR exec /entrypoint \
+                  airflow jobs check --job-type SchedulerJob --local
+          volumeMounts:
+            - name: logs
+              mountPath: "/opt/airflow/logs"
+            - name: dags
+              mountPath: /opt/airflow/dags
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+              runAsUser: 65533
+          env:
+            - name: GITSYNC_SSH_KEY_FILE
+              value: "/etc/git-secret/ssh"
+            - name: GITSYNC_SSH_KNOWN_HOSTS
+              value: "false"
+            - name: GITSYNC_REF
+              value: "master"
+            - name: GITSYNC_REPO
+              value: "git@github.com:Siplatov/data-notes.git"
+            - name: GITSYNC_ROOT
+              value: "/git"
+            - name: GITSYNC_LINK
+              value: "repo"
+            - name: GITSYNC_PERIOD
+              value: "10s"
+            - name: GITSYNC_MAX_FAILURES
+              value: "0"
+          volumeMounts:
+          - name: dags
+            mountPath: /git
+          - name: git-sync-ssh-key
+            mountPath: /etc/git-secret/ssh
+            readOnly: true
+            subPath: gitSshKey
+      volumes:
+        - name: config
+          configMap:
+            name: airflow-airflow-config
+        - name: logs
+          emptyDir: {}
+        - name: dags
+          emptyDir: {}
+        - name: git-sync-ssh-key
+          secret:
+            secretName: airflow-ssh-secret
+            defaultMode: 256
+---
+
+
+################################
+## Airflow Webserver Deployment
+################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  labels:
+    tier: airflow
+    component: webserver
+    release: airflow
+    chart: "airflow-1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: airflow
+      component: webserver
+      release: airflow
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: webserver
+        release: airflow
+    spec:
+      restartPolicy: Always
+      initContainers:
+        - name: wait-for-airflow-migrations
+          resources:
+            null
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+          args:
+            - airflow
+            - db
+            - check-migrations
+            - --migration-wait-timeout= 60
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+      containers:
+        - name: webserver
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - bash
+            - -c
+            - exec airflow webserver
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 5
+            periodSeconds: 10
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+      volumes:
+        - name: config
+          configMap:
+            name: airflow-airflow-config
+---
+
+
+################################
+## Airflow Redis StatefulSet
+#################################
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: airflow-redis
+  labels:
+    tier: airflow
+    component: redis
+    release: airflow
+    chart: "airflow-1"
+spec:
+  serviceName: airflow-redis
+  selector:
+    matchLabels:
+      tier: airflow
+      component: redis
+      release: airflow
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: redis
+        release: airflow
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-bullseye
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh"]
+          args: ["-c", "redis-server --requirepass ${REDIS_PASSWORD}"]
+          ports:
+            - name: redis-db
+              containerPort: 6379
+          volumeMounts:
+            - name: redis-db
+              mountPath: /data
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-redis-password
+                  key: password
+      volumes:
+        - name: redis-db
+          emptyDir: {}
+---
+
+
+################################
+## Airflow Worker Deployment
+#################################
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: airflow-worker
+  labels:
+    tier: airflow
+    component: worker
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  replicas: 1
+  serviceName: airflow-worker
+  selector:
+    matchLabels:
+      tier: airflow
+      component: worker
+      release: airflow
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: worker
+        release: airflow
+    spec:
+      securityContext:
+        runAsUser: 50000
+        fsGroup: 0
+      restartPolicy: Always
+      initContainers:
+        - name: wait-for-airflow-migrations
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+          args:
+            - airflow
+            - db
+            - check-migrations
+            - --migration-wait-timeout= 60
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+      containers:
+        - name: worker
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - bash
+            - -c
+            - |-
+              exec \
+              airflow celery worker
+          livenessProbe:
+            initialDelaySeconds: 10
+            timeoutSeconds: 20
+            failureThreshold: 5
+            periodSeconds: 60
+            exec:
+              command:
+                - sh
+                - -c
+                - CONNECTION_CHECK_MAX_COUNT=0 exec /entrypoint python -m celery --app airflow.executors.celery_executor.app inspect ping -d celery@$(hostname)
+          volumeMounts:
+            - name: logs
+              mountPath: "/opt/airflow/logs"
+            - name: dags
+              mountPath: /opt/airflow/dags
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+          env:
+            - name: DUMB_INIT_SETSID
+              value: "0"
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+              runAsUser: 65533
+          env:
+            - name: GITSYNC_SSH_KEY_FILE
+              value: "/etc/git-secret/ssh"
+            - name: GITSYNC_SSH_KNOWN_HOSTS
+              value: "false"
+            - name: GITSYNC_REF
+              value: "master"
+            - name: GITSYNC_REPO
+              value: "git@github.com:Siplatov/data-notes.git"
+            - name: GITSYNC_ROOT
+              value: "/git"
+            - name: GITSYNC_LINK
+              value: "repo"
+            - name: GITSYNC_PERIOD
+              value: "10s"
+            - name: GITSYNC_MAX_FAILURES
+              value: "0"
+          volumeMounts:
+          - name: dags
+            mountPath: /git
+          - name: git-sync-ssh-key
+            mountPath: /etc/git-secret/ssh
+            readOnly: true
+            subPath: gitSshKey
+      volumes:
+        - name: config
+          configMap:
+            name: airflow-airflow-config
+        - name: dags
+          emptyDir: {}
+        - name: git-sync-ssh-key
+          secret:
+            secretName: airflow-ssh-secret
+            defaultMode: 256
+  volumeClaimTemplates:
+    - metadata:
+        name: logs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 3Gi
+---
+
+
+################################
+## Airflow Create User Job
+#################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-create-user
+  labels:
+    tier: airflow
+    component: create-user-job
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: create-user-job
+        release: airflow
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-user
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - bash
+            - -c
+            - |-
+              exec \
+              airflow users create "$@"
+            - --
+            - -r
+            - 'Admin'
+            - -u
+            - 'admin'
+            - -e
+            - 'admin@example.com'
+            - -f
+            - 'admin'
+            - -l
+            - 'user'
+            - -p
+            - 'admin'
+          env:
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: airflow-airflow-config
+---
+
+
+################################
+## Airflow Run Migrations
+#################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-run-airflow-migrations
+  labels:
+    tier: airflow
+    component: run-airflow-migrations
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+spec:
+  template:
+    metadata:
+      labels:
+        tier: airflow
+        component: run-airflow-migrations
+        release: airflow
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: run-airflow-migrations
+          image: apache/airflow:2.6.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - bash
+            - -c
+            - |-
+              exec \
+              airflow db upgrade
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-fernet-key
+                  key: fernet-key
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW_CONN_AIRFLOW_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-metadata
+                  key: connection
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-webserver-secret-key
+                  key: webserver-secret-key
+            - name: AIRFLOW__CELERY__BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-broker-url
+                  key: connection
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "False"
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/airflow/airflow.cfg"
+              subPath: airflow.cfg
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: airflow-airflow-config
+---
+
+
+################################
+## Airflow Webserver Ingress
+################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: airflow-ingress
+  labels:
+    tier: airflow
+    component: airflow-ingress
+    release: airflow
+    chart: "airflow-1"
+    heritage: Helm
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  rules:
+  - host: <your_host>
+    http:
+      paths:
+      - backend:
+          service:
+            name: airflow-webserver
+            port:
+              name: airflow-ui
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - <your_host>
+    secretName: ingress-webserver-secret
+---
+
+
+################################
+## Airflow Fernet Key Secret
+#################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-fernet-key
+  labels:
+    tier: airflow
+    release: airflow
+    chart: airflow
+    heritage: Helm
+  annotations:
+    "helm.sh/hook": "pre-install"
+    "helm.sh/hook-delete-policy": "before-hook-creation"
+    "helm.sh/hook-weight": "0"
+type: Opaque
+data:
+  fernet-key: "YlU5eFIweDBNMWxGVDadfsadJFVkZTVUZDV25KVldXeGhaalpPYVVSa1NHbz0="
+---
+
+
+################################
+## Airflow Redis Password Secret
+#################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-redis-password
+  labels:
+    tier: airflow
+    component: redis
+    release: airflow
+    chart: airflow
+    heritage: Helm
+  annotations:
+    "helm.sh/hook": "pre-install"
+    "helm.sh/hook-delete-policy": "before-hook-creation"
+    "helm.sh/hook-weight": "0"
+type: Opaque
+data:
+  password: "bjRZU0pwnbvRHMA=="
+---
+
+
+##################################
+## Airflow Redis Connection Secret
+##################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-broker-url
+  labels:
+    tier: airflow
+    component: redis
+    release: airflow
+    chart: airflow
+    heritage: Helm
+  annotations:
+    "helm.sh/hook": "pre-install"
+    "helm.sh/hook-delete-policy": "before-hook-creation"
+    "helm.sh/hook-weight": "0"
+type: Opaque
+data:
+  connection: "cmVkaXM6Ly86bjRZUsdfsdafEBhaXJmbG93LXJlZGlzOjYzNzkvMA=="
